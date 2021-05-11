@@ -1,0 +1,310 @@
+processor 16f877a
+    #include<p16f877a.inc>
+    org 0x00
+    
+COUNT1	    equ 0x20
+COUNT2	    equ 0x22
+COUNT3	    equ	0x34	    
+TEMP	    equ 0x21 
+CHECK	    equ	0x31
+numberONE   equ 0x32
+numberTWO   equ 0x33
+ULTRA	    equ	0x34
+   
+INTCON equ 0Bh
+STATUS equ 03h
+ADCON0 equ 1Fh
+ADCON1	equ 9Fh
+	
+T1CON	equ  10h
+TMR1L	EQU 0EH
+TMR1H	EQU 0FH	
+PIE1	EQU 8CH   ;TIMER INTURREPT /BANK 1
+ 
+TRISA equ 85h
+PORTA equ 05h
+ 
+TRISB equ 86h
+PORTB equ 06h
+ 
+TRISD equ 88h
+PORTD equ 08h
+
+    goto Main
+    
+    
+    ORG	    0x04		;FOR THE ULTRASONIC SENSOR WHEN IS INTURRUPTED IT WILL START TIMER
+	CALL	    STARTIMER
+	BCF	    INTCON,1	;clearing the interrupt pin
+    retfie
+    
+    
+Main:
+	bsf	    STATUS,5
+	bcf	    STATUS,6		;selecting bank 1
+	movlw	    b'00000000'		;setting port d as output(1-LEFT,2BIT-RIGHT,3-LEFT ANTI CLOCK,4-RIGHT ZNTI CLOCK)
+	movwf	    TRISD
+	
+	;NEWUPDATE FOR ULTRASONIC (SETTING PINS IN PORTB)
+	movlw	    b'00000001'		;setting portB ECHO - RB0(IN),TRIGGER - RB1(OUT)
+	movwf	    TRISB
+	BCF	    PIE1,0		;DISABLE TIMER 1 OVERFLOW
+	
+	movlw	    b'11111'		;setting port A as input
+	movwf	    TRISA
+	bcf	    STATUS,5		;moving back to bank 0
+	clrf	    ADCON1		
+	bsf	    ADCON1,3		;configure pins in port A to 1000,adfm
+	bcf	    ADCON1,7		;0-left justified,1-right justified
+	movlw	    b'11000001'		;set A/D coversion on,set clock to Focs8 *changed from rc to fosc/2 during update
+	movwf	    ADCON0
+	
+	;NEWUPDATE ULTRASONIC
+	call	    timerconfig
+	bsf	    INTCON,7
+	BSF	    INTCON,4
+	BCF	    INTCON,1
+	
+	
+		    
+
+loop1
+	;DFAUT SELECTED CHANNEL IS 000 WHICH IS R0
+	MOVLW	    b'00110100'
+	movwf	    numberTWO
+	
+	call	    TRIGGERSET	    ;triggering ultrsasonic
+	call	    delay	    ;buying us some time for the interrupt to happen
+	
+;	call		adc		;r0-ULTRASONIC,R1-IR-LEFT,R5-IR RIGHT
+;	call		compare
+;	
+;	BTFSS		CHECK,2		;SAVING THE RESULT OF CHECK BIT 2 TO CHECK BIT 5 SINCE IT WILL GET ERASED WHEN CHECKWALLS FUNCYION CALLED.
+;					;CHECK WALLS CONSIST OF ADC FUNC WHICH CLEARS CHECK BIT 2 EVERY TIME
+;	BCF		CHECK,5
+;	BTFSC		CHECK,2
+;	BSF		CHECK,5
+	
+	btfss		CHECK,5		   ;IF 1 skip GOFOWARD
+	CALL		GOFOWARD
+	btfsc		CHECK,5		;if 1 goto loop1
+	CALL		CHECKWALLS
+	btfsc		CHECK,5
+	call		TURN
+	GOTO		loop1
+	
+
+	
+GOFOWARD
+	MOVLW		b'00000011'
+	MOVWF		PORTD
+	RETURN
+	
+STOP
+	MOVLW		b'00000000'
+	MOVWF		PORTD
+	RETURN
+	
+CHECKWALLS
+	;FOR LEFT IR SENSOR
+	bsf		ADCON0,3	;R1-SET3,IR-LEFT
+	call		adc
+	CALL		compare		;THRESHHOLD AND LEFT IR SENSOR VAL CAMPARE
+	BTFSC		CHECK,1		;IF SENSOE<THRESHHOLD SET 3RD BIT OF CHECK [real ir sensor works opposite the simulation,so i changed check,2 to check,1]
+	BSF		CHECK,3		;THERE IS A WALL LEFT
+	BTFSS		CHECK,1
+	BCF		CHECK,3		;THERE IS NO WALL LEFT
+	
+	
+	;FOR RIGHT IR SENSOR
+	bsf		ADCON0,5	;R1-SET3,IR-LEFT
+	call		adc
+	CALL		compare		;THRESHHOLD AND LEFT IR SENSOR VAL CAMPARE
+	BTFSC		CHECK,1		;IF SENSOE<THRESHHOLD SET 3RD BIT OF CHECK
+	BSF		CHECK,4		;THERE IS A WALL RIGHT
+	BTFSS		CHECK,1	
+	BCF		CHECK,4		;THERE IS NO WALL RIGHT
+	
+	return
+
+TURN
+	BTFSC		CHECK,4		;00-TURN RIGHT/01-TURN RIGHT/10-TURN LEFT/11-BACK
+	call		break2
+	BTFSS		CHECK,4
+	call		break1
+	return
+break1
+	BTFSS		CHECK,3
+	CALL		delay		;00-RIGHT / THERE IS NO WALL IN SIDES
+	CALL		TURNRIGHT	;01-RIGHT/THERE IS A WALL LEFT TO U
+	return
+break2
+	BTFSS		CHECK,3
+	CALL		LEFTTURN	 ;10 - LEFT TURN THERE IS A WALL RIGHT TO YOU
+	BTFSC		CHECK,3		 ;11-BOTH SIDES WALLS GO BACK
+	CALL		BACK
+	RETURN
+	
+TURNRIGHT
+	MOVLW		b'00001001'
+	MOVWF		PORTD
+	RETURN
+	
+LEFTTURN    
+	MOVLW		b'00000110'
+	MOVWF		PORTD
+	RETURN
+	
+BACK
+;	MOVLW		b'00001100'	    ;reverse a bit to make space and full tuenover
+;	MOVWF		PORTD
+	
+loop3
+	CALL		TURNRIGHT 
+	call		TRIGGERSET	    ;triggering ultrsasonic
+	call		delay	    ;buying us some time for the interrupt to happen
+	
+;	CALL		adc
+;	call		compare
+	btfsc		CHECK,5    ;changed 1,2
+	goto		loop3	    
+	RETURN
+	
+adc
+	
+	call		delay
+	bsf		ADCON0,2	;starting the a/d onversion 
+wait    
+	btfsc	    ADCON1,2		;when conv over ,goes to adresh
+	goto	    wait
+	movf	    ADRESH,0		;move adresh to no1
+	movwf	    numberONE
+	bcf	    ADCON0,3		;CLEARING CHANNEL SELECT BITS
+	bcf	    ADCON0,4
+	bcf	    ADCON0,5
+	
+	return
+		
+		
+delay
+loop2   
+	decfsz	COUNT1,1
+	goto	loop2
+	
+	return
+	
+	
+compare
+	bcf	CHECK,0		    ;CLEAR CHECK
+	bcf	CHECK,1	
+	bcf	CHECK,2	
+	bcf	STATUS,0
+	bcf	STATUS,2
+	movf	numberTWO,0
+	subwf	numberONE,0
+	btfsc	STATUS,2
+	bsf	CHECK,0		    ;set 0th bit of check to 1 if no1=no2
+	btfss	STATUS,0
+	bsf	CHECK,1		    ;set 1st bit of check to 1 if no2>no1
+	btfsc	STATUS,0
+	bsf	CHECK,2		    ;set 2nd bit of check to 1 if no1>no2
+	bcf	STATUS,0
+	
+	return
+	
+
+;FOR ULTRASONIC SENSOR
+	
+timerconfig
+	
+	CLRF	T1CON ; Stop Timer1, Internal Clock Source, ; T1 oscillator disabled, prescaler = 1:1
+	CLRF	TMR1H ; Clear Timer1 High byte register
+	CLRF	TMR1L ; Clear Timer1 Low byte register
+	;CLRF INTCON ; Disable interrupts
+	BSF	STATUS,0 ; Bank1
+	CLRF	PIE1 ; Disable peripheral interrupts
+	BCF	STATUS,0 ; Bank0
+	CLRF	PIR1 ; Clear peripheral interrupts Flags
+	MOVLW	0x30 ; Internal Clock source with 1:8 prescaler (changed from 0x30 to 0x32 to select external clock)
+	MOVWF	T1CON ; Timer1 is stopped and T1 osc is disabled
+	return
+
+;10US TRIGGER SIGNAL
+TRIGGERSET
+	BSF	PORTB,1
+	CALL	delayULTRA
+	bcf	PORTB,1
+	RETURN
+	
+delayULTRA
+	MOVLW	    b'00001000'
+	MOVWF	    COUNT3
+	loop4   decfsz  COUNT3,1
+		
+		goto loop4
+		
+	return
+	
+STARTIMER
+	btfss	PORTB,0	    ;STARTING THE TIMER IF ECHO IS SET
+	goto	$-1
+	BSF	T1CON,0 ; Timer1 starts to increment ; The Timer1 interrupt is disabled, do polling on the overflow bit
+	goto	CHECKECHO
+	RETURN
+	
+	
+CHECKECHO
+	BCF	PIR1,0	    ;CLEAR INTERRUPT FOR THE TIMER
+	btfsc	PORTB,0	    ;CHECK WETHER THE ECHO SIGNAL IS 0
+	goto	CHECKECHO   ;IF NOT 0 CHECK AGAIN GO TOP
+	BCF	T1CON,0	    ;IF 0 THEN STOP THE TIMER1
+	
+	movf	TMR1H,0	    ;MOVE TIMER VALUES TO W
+	movwf	numberONE   ;MOVE W TO NUMBER ONE /PREPERATION FOR CAMPARE
+	MOVLW	b'00000000' ;setting no 2 for comparison for the special case ultratronic sensor/tmrh 
+	movwf	numberTWO   
+	call	compare
+	btfss	CHECK,0	    ;if t<t fot 3cm wall is close so set the bit 5 /no1<n02
+	bsf	CHECK,7
+	btfsc	CHECK,0
+	bcf	CHECK,7
+	
+	movf	TMR1L,0	    ;MOVE TIMER VALUES TO W
+	movwf	numberONE   ;MOVE W TO NUMBER ONE /PREPERATION FOR CAMPARE
+	MOVLW	b'10000000' ;setting no 2 for comparison for the special case ultratronic sensor/tmrl
+	movwf	numberTWO   
+	call	compare	    ;number one is time from ultrasonic seensor,no 2 is time corresponding to 3cm
+	btfss	CHECK,2	    ;if t<t fot 3cm wall is close so set the bit 5 /no1<n02
+	bcf	CHECK,6
+	btfsc	CHECK,2
+	bsf	CHECK,6
+	
+	bsf	CHECK,5
+	btfss	CHECK,7	    ;if t<t fot 3cm wall is close so set the bit 5 /no1<n02
+	btfsc	CHECK,6
+	bcf	CHECK,5
+	
+;	movf	TMR1L,0	    ;MOVE TIMER VALUES TO W
+;	movwf	numberONE   ;MOVE W TO NUMBER ONE /PREPERATION FOR CAMPARE
+;	MOVLW	b'10000000' ;setting no 2 for comparison for the special case ultratronic sensor
+;	movwf	numberTWO   
+;	call	compare	    ;number one is time from ultrasonic seensor,no 2 is time corresponding to 3cm
+;	btfss	CHECK,1	    ;if t<t fot 3cm wall is close so set the bit 5 /no1<n02
+;	bcf	CHECK,5
+;	btfsc	CHECK,1
+;	bsf	CHECK,5
+	
+	MOVLW	    b'00110100'  ;setting the no back to 20
+	movwf	    numberTWO
+	
+	
+	CLRF TMR1H ; Clear Timer1 High byte register
+	CLRF TMR1L ; Clear Timer1 Low byte register
+	
+	return
+	end
+
+
+
+
+
